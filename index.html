@@ -482,7 +482,30 @@
         document.getElementById('main-hud-layer').classList.add('active');
 
         // 3. 记录上一页，方便 API 设置界面等返回
-        if (screenId !== 'api-screen' && screenId !== 'preview-screen' && screenId !== 'vn-screen') {
+        if (screenId !== 'api-screen' && screenId !== 'p// 页面切换核心逻辑
+    function switchScreen(screenId) {
+        // 专门处理进入 API 设置页面的逻辑：精准记录“进设置前究竟在哪个页面”
+        const activeScreen = document.querySelector('.screen.active');
+        if (activeScreen && screenId === 'api-screen') {
+            previousScreen = activeScreen.id; 
+        } else if (screenId === 'main-screen') {
+            previousScreen = 'main-screen'; // 回到主页重置记录
+        }
+
+        // 1. 切换屏幕显示
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(screenId).classList.add('active');
+        
+        // 2. 控制头像显示与菜单常驻
+        const playerHud = document.querySelector('.player-hud');
+        if (screenId === 'main-screen') {
+            playerHud.style.display = 'flex'; 
+        } else {
+            playerHud.style.display = 'none'; 
+            document.getElementById('menu-dropdown').classList.remove('active');
+        }
+        document.getElementById('main-hud-layer').classList.add('active');
+    }review-screen' && screenId !== 'vn-screen') {
             previousScreen = screenId;
         }
     }
@@ -805,6 +828,10 @@
         }
 
         const finalWorldBook = gameState.worldbook || "";
+        
+        // 补上缺失的全局系统规则设定，不让程序崩溃！
+        const masterSystemRule = "你正在参与《代号鸢》世界观的沉浸式角色扮演。请完全沉浸在你的角色中，禁止提及自己是AI或语言模型，严格按照角色设定与语气行事。";
+        
         const dynamicSysPrompt = `${masterSystemRule}\n\n【世界书设定】：\n${finalWorldBook}\n\n【输出格式铁律】：\n1. 必须使用“对话”+动作描写。例如：[发言] 傅融：“楼主，该算账了。”他皱着眉把账本推给你。\n2. 说话内容必须放在双引号里，动作描写放在双引号外面。\n3. 字数满了${CHAR_LIMIT}字会自动截断，请放心描写。\n\n当前主聊角色：${charPrompt}`;
         
         const messages = [{ role: 'system', content: dynamicSysPrompt }];
