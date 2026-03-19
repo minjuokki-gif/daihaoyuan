@@ -145,7 +145,7 @@
     </div>
 
     <div id="meet-screen" class="screen">
-        <button class="global-back-btn" onclick="switchScreen('main-screen')">‹ 返回</button>
+        <button class="global-back-btn" onclick="switchScreen(previousScreen)">‹ 返回</button>
         <div class="meet-container">
             <div class="meet-header"><div style="font-weight: bold; color: var(--primary-gold); font-size: 18px;">红鸾星动</div></div>
             <div class="boys-scroll-area" id="boys-list"></div>
@@ -464,26 +464,6 @@
 
     // 页面切换核心逻辑
     function switchScreen(screenId) {
-        // 1. 切换屏幕显示
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        document.getElementById(screenId).classList.add('active');
-        
-        // 2. 精准控制：只隐藏头像（让出返回键位置），但保持整个菜单层常驻
-        const playerHud = document.querySelector('.player-hud');
-        if (screenId === 'main-screen') {
-            playerHud.style.display = 'flex'; // 主页显示头像
-        } else {
-            playerHud.style.display = 'none'; // 子页面隐藏头像
-            // 切换页面时，顺便把展开的菜单收起，保持画面清爽
-            document.getElementById('menu-dropdown').classList.remove('active');
-        }
-
-        // 确保包含菜单按钮的父图层永远存在
-        document.getElementById('main-hud-layer').classList.add('active');
-
-        // 3. 记录上一页，方便 API 设置界面等返回
-        if (screenId !== 'api-screen' && screenId !== 'p// 页面切换核心逻辑
-    function switchScreen(screenId) {
         // 专门处理进入 API 设置页面的逻辑：精准记录“进设置前究竟在哪个页面”
         const activeScreen = document.querySelector('.screen.active');
         if (activeScreen && screenId === 'api-screen') {
@@ -505,7 +485,9 @@
             document.getElementById('menu-dropdown').classList.remove('active');
         }
         document.getElementById('main-hud-layer').classList.add('active');
-    }review-screen' && screenId !== 'vn-screen') {
+
+        // 3. 记录上一页，方便 API 设置界面等返回
+        if (screenId !== 'api-screen' && screenId !== 'preview-screen' && screenId !== 'vn-screen') {
             previousScreen = screenId;
         }
     }
@@ -819,19 +801,16 @@
     async function requestAI(userText, charPrompt) {
         const api = JSON.parse(localStorage.getItem('yuan_api_settings') || '{}');
         const btn = document.getElementById('vn-send-btn');
+        
         if (!api.url || !api.key) { 
             isGenerating = false; 
             updateVnHint(); 
-            btn.innerText = "发 送"; 
-            btn.disabled = false; 
+            if (btn) { btn.innerText = "发 送"; btn.disabled = false; }
             return showToast("请先在左上角设置 API！"); 
         }
 
         const finalWorldBook = gameState.worldbook || "";
-        
-        // 补上缺失的全局系统规则设定，不让程序崩溃！
         const masterSystemRule = "你正在参与《代号鸢》世界观的沉浸式角色扮演。请完全沉浸在你的角色中，禁止提及自己是AI或语言模型，严格按照角色设定与语气行事。";
-        
         const dynamicSysPrompt = `${masterSystemRule}\n\n【世界书设定】：\n${finalWorldBook}\n\n【输出格式铁律】：\n1. 必须使用“对话”+动作描写。例如：[发言] 傅融：“楼主，该算账了。”他皱着眉把账本推给你。\n2. 说话内容必须放在双引号里，动作描写放在双引号外面。\n3. 字数满了${CHAR_LIMIT}字会自动截断，请放心描写。\n\n当前主聊角色：${charPrompt}`;
         
         const messages = [{ role: 'system', content: dynamicSysPrompt }];
@@ -846,8 +825,9 @@
         }
 
         try {
-            let url = api.url; 
+            let url = api.url.trim(); 
             if (url.endsWith('/')) url = url.slice(0, -1);
+            if (api.provider !== 'gemini' && url.endsWith('/v1')) url = url.slice(0, -3); // 自动防呆
             
             const isGemini = api.provider === 'gemini';
             const reqUrl = isGemini ? `${url}/v1beta/models/${api.model}:generateContent?key=${api.key}` : `${url}/v1/chat/completions`;
@@ -863,13 +843,29 @@
                 bodyData = { model: api.model, messages: messages }; 
             }
 
+            // 🌟 新增：20秒强制超时防卡死机制
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000); 
+
             const res = await fetch(reqUrl, { 
                 method: 'POST', 
                 headers: isGemini ? {'Content-Type': 'application/json'} : {'Content-Type': 'application/json', 'Authorization': `Bearer ${api.key}`}, 
-                body: JSON.stringify(bodyData) 
+                body: JSON.stringify(bodyData),
+                signal: controller.signal // 绑定超时
             });
             
-            const data = await res.json();
+            clearTimeout(timeoutId); // 请求成功就取消倒计时
+
+            let data;
+            try {
+                const rawText = await res.text();
+                data = JSON.parse(rawText);
+            } catch (e) {
+                throw new Error(`接口返回异常(非JSON)，请检查API地址。状态码: ${res.status}`);
+            }
+
+            if (!res.ok) throw new Error(data.error?.message || data.message || `请求被拒绝 (状态码: ${res.status})`);
+
             let aiResponse = isGemini ? data.candidates[0].content.parts[0].text : data.choices[0].message.content;
 
             gameState.globalChats.push({ speakerId: currentChatBoyId, role: 'assistant', content: aiResponse }); 
@@ -880,12 +876,28 @@
             showNextVnLine();
             
         } catch (error) { 
-            showToast("API 调用失败！"); 
+            console.error("API 报错详细信息:", error);
+            let errMsg = error.message;
+            if (error.name === 'AbortError') {
+                errMsg = "请求超时(超过20秒)，服务器无响应";
+            } else if (errMsg === "Failed to fetch" || errMsg.includes("NetworkError")) {
+                errMsg = "跨域被浏览器拦截，或网络断开";
+            }
+            
+            showToast("❌ 请求失败: " + errMsg); 
             isGenerating = false; 
             updateVnHint(); 
+            
+            // 🌟 新增：如果卡在走来走去，直接变红字提示，不再死等
+            const vnText = document.getElementById('vn-text');
+            if(vnText && vnText.innerHTML.includes('正在走来')) {
+                vnText.innerHTML = "<span style='color:#ff4c4c'>角色迷路了（API请求失败），请看屏幕上方红色报错并检查设置。</span>";
+            }
         } finally { 
-            btn.innerText = "发 送"; 
-            btn.disabled = false; 
+            if (btn) {
+                btn.innerText = "发 送"; 
+                btn.disabled = false; 
+            }
         }
     }
 
@@ -901,6 +913,7 @@
         localStorage.setItem('yuan_api_settings', JSON.stringify(set)); 
         showToast('✅ API 设置已保存！'); 
         switchScreen(previousScreen); 
+        document.getElementById('menu-dropdown').classList.remove('active');
     });
 
     document.getElementById('fetch-models-btn').addEventListener('click', async () => {
