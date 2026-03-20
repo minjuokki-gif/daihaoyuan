@@ -497,7 +497,7 @@
         const toast = document.getElementById('toast');
         toast.innerText = msg;
         toast.style.display = 'block';
-        setTimeout(() => toast.style.display = 'none', 2500);
+        setTimeout(() => toast.style.display = 'none', 5000); // 🌟 5000 代表 5 秒，如果觉得不够可以改成 6000
     }
 
     // 更新左上角玩家信息
@@ -816,13 +816,32 @@
         const messages = [{ role: 'system', content: dynamicSysPrompt }];
         
         const recentHistory = (gameState.globalChats || []).slice(-100);
-        recentHistory.forEach(msg => {
-            messages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
-        });
+        let safeMessages = [];
         
+        recentHistory.forEach(msg => {
+            // 🌟 核心修复：认知隔离防代入
+            // 只有当前男主自己说过的话，才算作“AI(assistant)”，其他男主说的话，统统算作“客观发生的剧情(user)”
+            let mappedRole = (msg.role === 'assistant' && msg.speakerId === currentChatBoyId) ? 'assistant' : 'user';
+            
+            // 🌟 核心修复：防止 Gemini 报错“必须交替对话”的完美拼合逻辑
+            if (safeMessages.length > 0 && safeMessages[safeMessages.length - 1].role === mappedRole) {
+                safeMessages[safeMessages.length - 1].content += "\n" + msg.content;
+            } else {
+                safeMessages.push({ role: mappedRole, content: msg.content });
+            }
+        });
+
+        // 处理初次相见时的系统引导语，并无缝拼合
         if (recentHistory.length === 0 || recentHistory[recentHistory.length-1].role !== 'user') { 
-            messages.push({ role: 'user', content: `[发言] ${gameState.playerName}：${userText}` }); 
+            let injectContent = userText.includes('玩家刚刚来找你了') ? `【系统剧情】${userText}` : `[发言] ${gameState.playerName}：${userText}`;
+            if (safeMessages.length > 0 && safeMessages[safeMessages.length - 1].role === 'user') {
+                safeMessages[safeMessages.length - 1].content += "\n" + injectContent;
+            } else {
+                safeMessages.push({ role: 'user', content: injectContent });
+            }
         }
+
+        safeMessages.forEach(m => messages.push(m));
 
         try {
             let url = api.url.trim(); 
@@ -843,9 +862,9 @@
                 bodyData = { model: api.model, messages: messages }; 
             }
 
-            // 🌟 新增：20秒强制超时防卡死机制
+            // 🌟 修改：120秒强制超时机制（给 Pro 模型留足思考时间）
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 20000); 
+            const timeoutId = setTimeout(() => controller.abort(), 120000); 
 
             const res = await fetch(reqUrl, { 
                 method: 'POST', 
@@ -879,7 +898,7 @@
             console.error("API 报错详细信息:", error);
             let errMsg = error.message;
             if (error.name === 'AbortError') {
-                errMsg = "请求超时(超过20秒)，服务器无响应";
+                errMsg = "请求超时(超过2分钟)，服务器无响应";
             } else if (errMsg === "Failed to fetch" || errMsg.includes("NetworkError")) {
                 errMsg = "跨域被浏览器拦截，或网络断开";
             }
