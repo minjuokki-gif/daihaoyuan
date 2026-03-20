@@ -66,8 +66,8 @@
 
         .vn-container { width: 100%; height: 100%; position: relative; background-size: cover; background-position: center; display: flex; flex-direction: column; justify-content: flex-end; transition: background-image 0.5s ease;}
         
-        .vn-sprite { position: absolute; bottom: -15%; left: 50%; margin-left: -50%; height: 115%; width: 100%; max-width: none; object-fit: contain; pointer-events: none; z-index: 5; transition: opacity 0.3s ease; transform-origin: bottom center;}
-        .vn-sprite-guest { position: absolute; bottom: -2%; right: -5%; height: 85%; width: 65%; max-width: none; object-fit: contain; object-position: bottom center; pointer-events: none; z-index: 4; opacity: 0.85; transition: opacity 0.3s ease;}
+        .vn-sprite { position: absolute; bottom: -15%; left: 50%; transform: translateX(-50%); height: 115%; width: auto; max-width: none; object-fit: contain; pointer-events: none; z-index: 5; transition: opacity 0.3s ease; transform-origin: bottom center; image-rendering: -webkit-optimize-contrast; -webkit-font-smoothing: antialiased; }
+        .vn-sprite-guest { position: absolute; bottom: -2%; right: -5%; transform: translateX(0); height: 85%; width: auto; max-width: 100vw; object-fit: contain; object-position: bottom center; pointer-events: none; z-index: 4; opacity: 0.85; transition: opacity 0.3s ease; image-rendering: -webkit-optimize-contrast; }
 
         .vn-dialogue-box { position: relative; width: 94%; margin: 0 auto 75px auto; min-height: 150px; background-image: url('https://i.postimg.cc/CLTSn8kF/Furniture-Explore5-Main-View-text-bg1.png'); background-size: 100% 100%; z-index: 10; display: flex; flex-direction: column; padding: 35px 25px 20px 30px; box-sizing: border-box; cursor: pointer; filter: drop-shadow(0 10px 20px rgba(0,0,0,0.8));}
         .vn-nameplate { position: absolute; top: -18px; left: 15px; background-size: 100% 100%; color: #fff; text-shadow: 1px 1px 3px #000, -1px -1px 2px #000; font-size: 15px; font-weight: bold; padding: 6px 35px; z-index: 12; white-space: nowrap; text-align: center;}
@@ -643,9 +643,12 @@
         vnQueue = [];
         
         if (!gameState.globalChats) gameState.globalChats = [];
-        const lastMsg = gameState.globalChats.length > 0 ? gameState.globalChats[gameState.globalChats.length - 1] : null;
+        if (!gameState.chats[id]) gameState.chats[id] = [];
         
-        if (!lastMsg || lastMsg.speakerId !== id) { 
+        const charHistory = gameState.chats[id];
+        const lastMsg = charHistory.length > 0 ? charHistory[charHistory.length - 1] : null;
+        
+        if (!lastMsg) { 
             isGenerating = true; 
             document.getElementById('vn-text').innerHTML = "<span style='color:#ccc'>正在走来...</span>";
             updateVnHint();
@@ -785,6 +788,8 @@
         if (!gameState.globalChats) gameState.globalChats = [];
         
         gameState.globalChats.push({ speakerId: currentChatBoyId, role: 'user', content: formattedMsg }); 
+        if (!gameState.chats[currentChatBoyId]) gameState.chats[currentChatBoyId] = [];
+        gameState.chats[currentChatBoyId].push({ role: 'user', content: formattedMsg });
         autoSave();
         
         parseAndQueueText(formattedMsg, gameState.playerName); 
@@ -811,7 +816,10 @@
 
         const finalWorldBook = gameState.worldbook || "";
         const masterSystemRule = "你正在参与《代号鸢》世界观的沉浸式角色扮演。请完全沉浸在你的角色中，禁止提及自己是AI或语言模型，严格按照角色设定与语气行事。";
-        const dynamicSysPrompt = `${masterSystemRule}\n\n【世界书设定】：\n${finalWorldBook}\n\n【输出格式铁律】：\n1. 必须使用“对话”+动作描写。例如：[发言] 傅融：“楼主，该算账了。”他皱着眉把账本推给你。\n2. 说话内容必须放在双引号里，动作描写放在双引号外面。\n3. 字数满了${CHAR_LIMIT}字会自动截断，请放心描写。\n\n当前主聊角色：${charPrompt}`;
+        
+        // 🌟 核心升级：动态注入当前角色的名字，彻底封死 AI 抢夺玩家身份的 Bug
+        const charName = combinedDB[currentChatBoyId].name;
+        const dynamicSysPrompt = `${masterSystemRule}\n\n【世界书设定】：\n${finalWorldBook}\n\n【大世界记忆与视角法则】：\n下方的记录是全局时间线，包含玩家与其他人的互动。\n1. 你并非全知全能！你只知道发生在你眼前的事。\n2. 玩家与其他角色的私下互动（如亲吻、密谋等），只要你不在场，你**完全不知情**！\n3. 绝对不可对不知情的事件吃醋或强行代入！只对玩家此时此刻【对你】说的话做出反应。\n\n【输出格式铁律（极度重要）】：\n1. 每次回复必须以 “[发言] 你的角色名：” 开头！绝对不可扮演玩家（广陵王）！\n2. 说话内容必须放在双引号里，动作描写放在外面。例如：[发言] ${charName}：“找我何事？”擦了擦手中的刀。\n3. 字数满了${CHAR_LIMIT}字会自动截断，请放心描写。\n\n当前你的身份是：${charPrompt}`;
         
         const messages = [{ role: 'system', content: dynamicSysPrompt }];
         
@@ -819,23 +827,28 @@
         let safeMessages = [];
         
         recentHistory.forEach(msg => {
-            // 🌟 核心修复：认知隔离防代入
-            // 只有当前男主自己说过的话，才算作“AI(assistant)”，其他男主说的话，统统算作“客观发生的剧情(user)”
+            // 认知隔离
             let mappedRole = (msg.role === 'assistant' && msg.speakerId === currentChatBoyId) ? 'assistant' : 'user';
             
-            // 🌟 核心修复：防止 Gemini 报错“必须交替对话”的完美拼合逻辑
+            let content = msg.content;
+            if (msg.role === 'assistant' && msg.speakerId !== currentChatBoyId) {
+                let otherName = combinedDB[msg.speakerId] ? combinedDB[msg.speakerId].name : '其他角色';
+                content = `【大世界时间线 - ${otherName}的剧情记录，你当时不在场】\n${content}`;
+            }
+
+            // 防止 Gemini 报错的完美拼合逻辑
             if (safeMessages.length > 0 && safeMessages[safeMessages.length - 1].role === mappedRole) {
-                safeMessages[safeMessages.length - 1].content += "\n" + msg.content;
+                safeMessages[safeMessages.length - 1].content += "\n\n" + content;
             } else {
-                safeMessages.push({ role: mappedRole, content: msg.content });
+                safeMessages.push({ role: mappedRole, content: content });
             }
         });
 
-        // 处理初次相见时的系统引导语，并无缝拼合
-        if (recentHistory.length === 0 || recentHistory[recentHistory.length-1].role !== 'user') { 
+        // 🌟 修复底层重复 Bug：只有初次打招呼时才注入系统引导，平时绝对不再重复追加 userText 让 AI 迷惑
+        if (recentHistory.length === 0 || recentHistory[recentHistory.length - 1].role !== 'user') {
             let injectContent = userText.includes('玩家刚刚来找你了') ? `【系统剧情】${userText}` : `[发言] ${gameState.playerName}：${userText}`;
             if (safeMessages.length > 0 && safeMessages[safeMessages.length - 1].role === 'user') {
-                safeMessages[safeMessages.length - 1].content += "\n" + injectContent;
+                safeMessages[safeMessages.length - 1].content += "\n\n" + injectContent;
             } else {
                 safeMessages.push({ role: 'user', content: injectContent });
             }
@@ -846,7 +859,7 @@
         try {
             let url = api.url.trim(); 
             if (url.endsWith('/')) url = url.slice(0, -1);
-            if (api.provider !== 'gemini' && url.endsWith('/v1')) url = url.slice(0, -3); // 自动防呆
+            if (api.provider !== 'gemini' && url.endsWith('/v1')) url = url.slice(0, -3); 
             
             const isGemini = api.provider === 'gemini';
             const reqUrl = isGemini ? `${url}/v1beta/models/${api.model}:generateContent?key=${api.key}` : `${url}/v1/chat/completions`;
@@ -862,7 +875,6 @@
                 bodyData = { model: api.model, messages: messages }; 
             }
 
-            // 🌟 修改：120秒强制超时机制（给 Pro 模型留足思考时间）
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 120000); 
 
@@ -870,10 +882,10 @@
                 method: 'POST', 
                 headers: isGemini ? {'Content-Type': 'application/json'} : {'Content-Type': 'application/json', 'Authorization': `Bearer ${api.key}`}, 
                 body: JSON.stringify(bodyData),
-                signal: controller.signal // 绑定超时
+                signal: controller.signal
             });
             
-            clearTimeout(timeoutId); // 请求成功就取消倒计时
+            clearTimeout(timeoutId);
 
             let data;
             try {
@@ -907,7 +919,6 @@
             isGenerating = false; 
             updateVnHint(); 
             
-            // 🌟 新增：如果卡在走来走去，直接变红字提示，不再死等
             const vnText = document.getElementById('vn-text');
             if(vnText && vnText.innerHTML.includes('正在走来')) {
                 vnText.innerHTML = "<span style='color:#ff4c4c'>角色迷路了（API请求失败），请看屏幕上方红色报错并检查设置。</span>";
@@ -919,7 +930,7 @@
             }
         }
     }
-
+    
     // --- ⚙️ API设置与模型拉取 ---
     document.getElementById('api-form').addEventListener('submit', (e) => { 
         e.preventDefault(); 
@@ -1175,12 +1186,12 @@
         if(!el) return;
 
         // 🔥 绝不使用 transform等3D加速代码，彻底告别iOS苹果的强制降质马赛克！
-        el.style.transform = 'none';
+        el.style.transform = targetElId === 'vn-sprite-guest' ? `none` : `translateX(-50%)`;
         el.style.height = (115 * scale) + '%';
-        el.style.width = (100 * scale) + '%';
+        el.style.width = 'auto';
         el.style.bottom = `calc(-15% - ${y}vh)`;
         el.style.left = targetElId === 'vn-sprite-guest' ? `calc(75% + ${x}vw)` : `calc(50% + ${x}vw)`;
-        el.style.marginLeft = `-${50 * scale}%`;
+        el.style.marginLeft = '0';
     }
 
     function saveSpriteSettings() {
@@ -1212,13 +1223,13 @@
         if(!el) return;
         
         // 🔥 读档渲染也绝对禁用 transform
-        el.style.transform = 'none';
+        el.style.transform = isGuest ? `none` : `translateX(-50%)`;
         const scale = settings.scale / 100;
         el.style.height = (115 * scale) + '%';
-        el.style.width = (100 * scale) + '%';
+        el.style.width = 'auto';
         el.style.bottom = `calc(-15% - ${settings.y}vh)`;
         el.style.left = `calc(${isGuest ? 75 : 50}% + ${settings.x}vw)`;
-        el.style.marginLeft = `-${50 * scale}%`;
+        el.style.marginLeft = '0';
     }
 
     function makeScrollable(id) { 
